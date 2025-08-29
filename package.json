@@ -20,6 +20,10 @@
      "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.18.0",
     "os": "^0.1.2",
+    "mammoth": "^1.10.0",
+    
+    "tesseract.js": "^6.0.1",
+    "textract": "^2.5.0",
     "nodemailer": "^7.0.5"
     
   }
