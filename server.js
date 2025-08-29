@@ -131,7 +131,7 @@ function buildContents({ messages, pdfContexts }) {
 // Works as:
 // - JSON body: { messages: [...] }  -> normal chat
 // - multipart/form-data: fields: messages (JSON string), files: pdfs[] -> chat grounded in PDFs
-app.post('/api/chat', upload.array('pdfs', 10), async (req, res) => {
+app.post('/api/chat', upload.array('files', 10), async (req, res) => {
   try {
     const isMultipart = req.headers['content-type']?.includes('multipart/form-data');
 
