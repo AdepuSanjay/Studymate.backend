@@ -23,7 +23,8 @@ const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey";
 const ALLOWED_ORIGINS = [
   'http://localhost:5173',
   'http://localhost:3000',
-  'https://el-front-umber.vercel.app',
+  
+  'https://studymate-swart.vercel.app'
 ];
 app.use(
   cors({
