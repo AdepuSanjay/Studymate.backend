@@ -19,6 +19,7 @@
     "pdf-parse": "^1.1.1",
      "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.18.0",
+    "os": "^0.1.2",
     "nodemailer": "^7.0.5"
     
   }
