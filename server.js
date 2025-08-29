@@ -21,9 +21,7 @@ if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 // ============ MongoDB ============
 mongoose.connect(
-  process.env.MONGO_URI || "mongodb+srv://abcd:1234@cluster0.k4abt9h.mongodb.net/studymate",
-  { useNewUrlParser: true, useUnifiedTopology: true }
-).then(() => console.log("✅ MongoDB Connected"))
+  process.env.MONGO_URI || "mongodb+srv://abcd:1234@cluster0.k4abt9h.mongodb.net/studymate").then(() => console.log("✅ MongoDB Connected"))
  .catch(err => console.error("❌ MongoDB Error:", err));
 
 const userSchema = new mongoose.Schema({
