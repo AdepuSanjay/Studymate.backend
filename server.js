@@ -12,7 +12,7 @@ const PORT = process.env.PORT || 5000;
 
 // Prefer env var; fallback to hardcoded key (discouraged in production)
 const GEMINI_API_KEY =
-  process.env.GEMINI_API_KEY || 'AIzaSyCinlkzHBLh0p214yPkXZP1d1zzYedLIsg';
+  process.env.GEMINI_API_KEY || 'AIzaSyDyduQZgzjfnPdQi4qCHylwQ9mZeAm1xu0';
 
 // -------- Multer config for PDF uploads (multiple) --------
 const upload = multer({
