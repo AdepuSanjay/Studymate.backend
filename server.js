@@ -9,6 +9,8 @@ const multer = require('multer');
 const fs = require('fs');
 const os = require('os');
 const pdfParse = require('pdf-parse');
+const mammoth = require('mammoth');              // for .docx
+const textract = require('textract');            // for many office formats (pptx/xlsx/doc/etc.) & html/rtf
 const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
@@ -40,13 +42,13 @@ app.use(express.json());
 const UPLOAD_DIR = path.join(os.tmpdir(), 'uploads');
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
-// --------- Multer for PDFs (only used by /api/chat if you send files) ---------
+// --------- Multer (accept ANY file field names & types) ---------
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB per file
   fileFilter: (req, file, cb) => {
-    if (file.mimetype === 'application/pdf') cb(null, true);
-    else cb(new Error('Only PDF files are allowed'), false);
+    // Accept all; we’ll validate/attempt extraction per type below.
+    cb(null, true);
   },
 });
 
@@ -176,6 +178,116 @@ function buildContents({ messages, pdfContexts }) {
 }
 
 // ===================================================================
+// 🔎 Text extraction for many file types
+// ===================================================================
+const extFromName = (name = '') => (name.split('.').pop() || '').toLowerCase();
+
+async function ocrImageToText(buffer) {
+  try {
+    const { createWorker } = await import('tesseract.js'); // dynamic to avoid cold-start cost
+    const worker = await createWorker();
+    try {
+      const { data: { text } } = await worker.recognize(buffer);
+      await worker.terminate();
+      return text || '';
+    } catch (e) {
+      await worker.terminate();
+      throw e;
+    }
+  } catch (e) {
+    console.error('OCR error (tesseract):', e.message || e);
+    return ''; // fail soft
+  }
+}
+
+function textractFromBuffer(mime, buffer, ext) {
+  return new Promise((resolve) => {
+    // textract wants either mimetype or "path" style hints; we can hint with ext
+    textract.fromBufferWithMime(mime || '', buffer, { typeOverride: ext }, (err, text) => {
+      if (err) {
+        console.error('textract error:', err.message || err);
+        return resolve('');
+      }
+      resolve(text || '');
+    });
+  });
+}
+
+async function extractTextFromFile(file) {
+  const mime = file.mimetype || '';
+  const ext = extFromName(file.originalname);
+
+  // 1) PDFs
+  if (mime === 'application/pdf' || ext === 'pdf') {
+    try {
+      const data = await pdfParse(file.buffer);
+      return data.text || '';
+    } catch (e) {
+      console.error('pdf-parse error:', e.message || e);
+      // fallback to textract attempt
+      const fallback = await textractFromBuffer(mime, file.buffer, ext);
+      return fallback || '';
+    }
+  }
+
+  // 2) DOCX
+  if (mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || ext === 'docx') {
+    try {
+      const { value } = await mammoth.extractRawText({ buffer: file.buffer });
+      return value || '';
+    } catch (e) {
+      console.error('mammoth error:', e.message || e);
+      const fallback = await textractFromBuffer(mime, file.buffer, ext);
+      return fallback || '';
+    }
+  }
+
+  // 3) Plain-ish text
+  if (
+    mime.startsWith('text/') ||
+    ['txt', 'md', 'csv', 'json', 'log'].includes(ext)
+  ) {
+    try {
+      // Decode as UTF-8 text
+      return file.buffer.toString('utf8');
+    } catch {
+      return '';
+    }
+  }
+
+  // 4) HTML/RTF/Older Office/PPTX/XLSX/ODT/... via textract
+  if (
+    [
+      'application/rtf',
+      'text/rtf',
+      'text/html',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-powerpoint',
+      'application/vnd.ms-excel',
+      'application/vnd.oasis.opendocument.text',
+      'application/vnd.oasis.opendocument.spreadsheet',
+      'application/vnd.oasis.opendocument.presentation'
+    ].includes(mime) ||
+    ['rtf', 'html', 'htm', 'doc', 'ppt', 'pptx', 'xls', 'xlsx', 'odt', 'ods', 'odp'].includes(ext)
+  ) {
+    const text = await textractFromBuffer(mime, file.buffer, ext);
+    return text || '';
+  }
+
+  // 5) Images -> OCR
+  if (mime.startsWith('image/') || ['png', 'jpg', 'jpeg', 'bmp', 'gif', 'tiff', 'webp'].includes(ext)) {
+    const text = await ocrImageToText(file.buffer);
+    return text || '';
+  }
+
+  // 6) Unknown -> try textract anyway
+  const fallback = await textractFromBuffer(mime, file.buffer, ext);
+  return fallback || '';
+}
+
+// ===================================================================
 // 🔐 AUTH (only for history; /api/chat remains public)
 // ===================================================================
 
@@ -284,9 +396,9 @@ function requireAuth(req, res, next) {
 }
 
 // ===================================================================
-// 💬 Chat endpoint (UNCHANGED logic, public, no auth needed)
+// 💬 Chat endpoint (public, no auth) — now accepts ANY file fields
 // ===================================================================
-app.post('/api/chat', upload.array('files', 10), async (req, res) => {
+app.post('/api/chat', upload.any(), async (req, res) => {
   try {
     const isMultipart = req.headers['content-type']?.includes('multipart/form-data');
 
@@ -307,37 +419,39 @@ app.post('/api/chat', upload.array('files', 10), async (req, res) => {
       messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
     }
 
-    // 2) PDFs
-    let pdfContexts = [];
-    if (isMultipart && req.files && req.files.length > 0) {
+    // 2) Files -> Text contexts (universal)
+    let fileContexts = [];
+    const incomingFiles = Array.isArray(req.files) ? req.files : [];
+
+    if (isMultipart && incomingFiles.length > 0) {
       const parsed = await Promise.all(
-        req.files.map(async (file) => {
-          const data = await pdfParse(file.buffer);
+        incomingFiles.map(async (file) => {
+          const text = await extractTextFromFile(file);
           return {
-            filename: file.originalname || 'unnamed.pdf',
-            text: data.text || '',
+            filename: file.originalname || 'unnamed',
+            text: (text || '').trim(),
           };
         })
       );
-      pdfContexts = parsed.filter((p) => p.text && p.text.trim().length > 0);
+      fileContexts = parsed.filter(p => p.text && p.text.length > 0);
     }
 
     // 3) system
     const systemText =
-      pdfContexts.length > 0
+      fileContexts.length > 0
         ? [
             'You are a helpful assistant.',
-            'Use ONLY the provided PDF context to answer when possible.',
-            'If there are multiple PDFs:',
+            'Use ONLY the provided document context to answer when possible.',
+            'If multiple files are present:',
             '- One may contain questions; others may contain reference material.',
-            '- Answer each question strictly using the reference PDFs. If information is missing, say what is missing.',
-            'Cite the source PDF names inline like [source: filename.pdf] when helpful.',
-            'If something is not in the PDFs, respond briefly and say it is not present in the provided documents.',
+            '- Answer each question strictly using the reference documents. If information is missing, say what is missing.',
+            'Cite the source file names inline like [source: filename.ext] when helpful.',
+            'If something is not in the documents, respond briefly and say it is not present in the provided documents.',
           ].join('\n')
         : 'You are a helpful assistant. No documents are provided; answer normally.';
 
     // 4) contents
-    const contents = buildContents({ messages, pdfContexts });
+    const contents = buildContents({ messages, pdfContexts: fileContexts });
 
     // 5) call model
     const data = await callGemini(MODEL, { systemText, contents });
@@ -350,8 +464,8 @@ app.post('/api/chat', upload.array('files', 10), async (req, res) => {
 
     res.json({
       ok: true,
-      groundedInPdfs: pdfContexts.length > 0,
-      usedSources: pdfContexts.map((p) => p.filename),
+      groundedInPdfs: fileContexts.length > 0, // name kept for backward-compat
+      usedSources: fileContexts.map((p) => p.filename),
       response: text,
       raw: data,
     });
