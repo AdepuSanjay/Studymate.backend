@@ -19,11 +19,14 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey";
 
-// --------- IBM Granite via Hugging Face (DEMO KEY INLINE) ---------
-const HF_API_KEY = "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"; // ⚠️ demo only, rotate later
-const GRANITE_MODEL = "ibm-granite/granite-3.3-8b-instruct"; // watsonx family on HF
-const HF_GRANITE_ENDPOINT = `https://api-inference.huggingface.co/models/${GRANITE_MODEL}`;
+const HF_API_KEY = process.env.HF_API_KEY; // e.g. hf_xxx (DO NOT commit)
+const GRANITE_MODEL = process.env.GRANITE_MODEL || "ibm-granite/granite-3.3-8b-instruct";
+const HF_INFERENCE_BASE = process.env.HF_INFERENCE_BASE || "https://api-inference.huggingface.co";
+const HF_GRANITE_ENDPOINT = `${HF_INFERENCE_BASE}/models/${GRANITE_MODEL}`;
 
+if (!HF_API_KEY) {
+  console.warn("⚠️  HF_API_KEY is not set. /api/chat-ibm will fail until you provide it in .env");
+}
 
 
 // --------- CORS ---------
