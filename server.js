@@ -636,7 +636,8 @@ function contentsToPrompt({ systemText, contents }) {
   return `${sys}${conv}\n**ASSISTANT**:\n`;
 }
 
-// Call IBM Granite on HF Inference API
+
+
 async function callGraniteHF({ prompt, max_new_tokens = 600, temperature = 0.2 }) {
   const resp = await fetch(HF_GRANITE_ENDPOINT, {
     method: "POST",
@@ -651,24 +652,27 @@ async function callGraniteHF({ prompt, max_new_tokens = 600, temperature = 0.2 }
     }),
   });
 
-  const json = await resp.json();
+  const bodyText = await resp.text();            // ← read text first
+  let json = null;
+  try { json = JSON.parse(bodyText); } catch {}  // ← may be plain text (e.g., 404 "Not Found")
+
   if (!resp.ok) {
-    const msg = json?.error || JSON.stringify(json).slice(0, 300);
-    const err = new Error(`Granite HF error: ${msg}`);
+    const msg = json?.error || bodyText || `${resp.status} ${resp.statusText}`;
+    const err = new Error(`Granite HF error: ${msg}`); 
     err.status = resp.status || 500;
-    err.raw = json;
+    err.raw = json ?? bodyText;
     throw err;
   }
 
-  // HF can return array or object; normalize to text
+  // Normalize output
   const text =
     (Array.isArray(json) && (json[0]?.generated_text || json[0]?.summary_text)) ||
-    json.generated_text ||
-    json.text ||
-    (typeof json === "string" ? json : JSON.stringify(json));
+    json?.generated_text || json?.text ||
+    (typeof json === "string" ? json : "");
 
-  return { raw: json, text: text || "" };
-    }
+  return { raw: json ?? bodyText, text: text || "" };
+}
+
 
 
 
