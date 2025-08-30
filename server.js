@@ -457,7 +457,7 @@ app.post('/api/chat', upload.any(), async (req, res) => {
             'If multiple files are present:',
             '- One may contain questions; others may contain reference material.',
             '- Answer each question strictly using the reference documents. If information is missing, say what is missing.',
-            'Cite the source file names inline like [source: filename.ext] when helpful.',
+            'Cite the source file name [source: filename.ext] at the end of chat response ',
             'If something is not in the documents, respond briefly and say it is not present in the provided documents.',
           ].join('\n')
         : 'You are a helpful assistant. No documents are provided; answer normally.';
