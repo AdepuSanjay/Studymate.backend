@@ -19,6 +19,13 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey";
 
+// --------- IBM Granite via Hugging Face (DEMO KEY INLINE) ---------
+const HF_API_KEY = "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"; // ⚠️ demo only, rotate later
+const GRANITE_MODEL = "ibm-granite/granite-3.3-8b-instruct"; // watsonx family on HF
+const HF_GRANITE_ENDPOINT = `https://api-inference.huggingface.co/models/${GRANITE_MODEL}`;
+
+
+
 // --------- CORS ---------
 const ALLOWED_ORIGINS = [
   'http://localhost:5173',
@@ -610,6 +617,136 @@ app.post('/api/history/chats/:id/files', requireAuth, diskUpload.array('files', 
     res.status(500).json({ error: 'attach_failed' });
   }
 });
+
+
+// Convert Gemini 'contents' to a single prompt for Granite-style text-generation
+function contentsToPrompt({ systemText, contents }) {
+  const sys = systemText ? `### System\n${systemText}\n\n` : "";
+  const conv = (contents || [])
+    .map((c) => {
+      const role = c.role === 'model' ? 'assistant' : c.role; // gemini -> generic
+      const text = (c.parts || []).map(p => p.text || "").join("\n");
+      return role && text ? `**${role.toUpperCase()}**:\n${text}\n` : "";
+    })
+    .join("\n");
+  return `${sys}${conv}\n**ASSISTANT**:\n`;
+}
+
+// Call IBM Granite on HF Inference API
+async function callGraniteHF({ prompt, max_new_tokens = 600, temperature = 0.2 }) {
+  const resp = await fetch(HF_GRANITE_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${HF_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      inputs: prompt,
+      parameters: { max_new_tokens, temperature },
+      options: { wait_for_model: true, use_cache: true },
+    }),
+  });
+
+  const json = await resp.json();
+  if (!resp.ok) {
+    const msg = json?.error || JSON.stringify(json).slice(0, 300);
+    const err = new Error(`Granite HF error: ${msg}`);
+    err.status = resp.status || 500;
+    err.raw = json;
+    throw err;
+  }
+
+  // HF can return array or object; normalize to text
+  const text =
+    (Array.isArray(json) && (json[0]?.generated_text || json[0]?.summary_text)) ||
+    json.generated_text ||
+    json.text ||
+    (typeof json === "string" ? json : JSON.stringify(json));
+
+  return { raw: json, text: text || "" };
+    }
+
+
+
+
+// ===================================================================
+// 💬 IBM Granite endpoint (public, no auth) — mirrors /api/chat
+// ===================================================================
+app.post('/api/chat-ibm', upload.any(), async (req, res) => {
+  try {
+    const isMultipart = req.headers['content-type']?.includes('multipart/form-data');
+
+    // 1) messages
+    let messages = [];
+    if (isMultipart) {
+      const raw = req.body?.messages;
+      if (raw) {
+        try { messages = JSON.parse(raw); }
+        catch { return res.status(400).json({ error: 'Invalid JSON in "messages" field' }); }
+      }
+    } else {
+      messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
+    }
+
+    // 2) Files -> Text contexts
+    let fileContexts = [];
+    const incomingFiles = Array.isArray(req.files) ? req.files : [];
+    if (isMultipart && incomingFiles.length > 0) {
+      const parsed = await Promise.all(
+        incomingFiles.map(async (file) => {
+          const text = await extractTextFromFile(file);
+          return {
+            filename: file.originalname || 'unnamed',
+            text: (text || '').trim(),
+          };
+        })
+      );
+      fileContexts = parsed.filter(p => p.text && p.text.length > 0);
+    }
+
+    // 3) system
+    const systemText =
+      fileContexts.length > 0
+        ? [
+            'You are a helpful assistant.',
+            'Use ONLY the provided document context to answer when possible.',
+            'If multiple files are present:',
+            '- One may contain questions; others may contain reference material.',
+            '- Answer strictly using the reference documents. If info is missing, say what is missing.',
+            'Cite the source file names inline like [source: filename.ext] when helpful.',
+            'If something is not in the documents, say it is not present there.',
+          ].join('\n')
+        : 'You are a helpful assistant. No documents are provided; answer normally.';
+
+    // 4) Build Gemini-style contents (reuse your helper)
+    const contents = buildContents({ messages, pdfContexts: fileContexts });
+
+    // 5) Convert contents to Granite prompt and call Granite
+    const prompt = contentsToPrompt({ systemText, contents });
+    const { raw, text } = await callGraniteHF({
+      prompt,
+      max_new_tokens: 800,
+      temperature: 0.2,
+    });
+
+    // 6) Respond in SAME shape as /api/chat
+    res.json({
+      ok: true,
+      groundedInPdfs: fileContexts.length > 0,
+      usedSources: fileContexts.map((p) => p.filename),
+      response: text,
+      raw,
+    });
+  } catch (error) {
+    console.error('Granite Chat Error:', error.raw || error);
+    res
+      .status(error.status || 500)
+      .json({ error: 'Granite Chat Error', details: error.message });
+  }
+});
+
+
+
 
 // ===================================================================
 // Health
