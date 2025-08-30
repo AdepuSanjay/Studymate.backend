@@ -111,7 +111,7 @@ const transporter = nodemailer.createTransport({
   }
 });
 
-// --------- Gemini Setup (Do NOT change chat logic) ---------
+
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || 'AIzaSyBxfK1fAJjzJImC6VheREpSNxl-JbVeb6g';
 const MODEL = 'gemini-2.0-flash';
 
