@@ -19,6 +19,7 @@
     "pdf-parse": "^1.1.1",
      "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.18.0",
+    "dotenv": "^17.2.1",
     "os": "^0.1.2",
     "mammoth": "^1.10.0",
     
