@@ -71,7 +71,7 @@ mongoose
   .catch(err => console.error("❌ MongoDB Error:", err));
 
 const userSchema = new mongoose.Schema({
-  username: { type: String, unique: true, required: true },
+  username: { type: String, unique: false, required: true },
   email:    { type: String, unique: true, required: true },
   password: { type: String, required: true }, // plain (per your request)
   isVerified: { type: Boolean, default: false },
