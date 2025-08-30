@@ -127,6 +127,53 @@ function chunkText(str, chunkSize = 12000) {
   return chunks;
 }
 
+
+
+async function callGeminiWithTimeout(model, { systemText, contents }, ms = 20000) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), ms);
+
+  try {
+    const body = {
+      system_instruction: systemText ? { parts: [{ text: systemText }] } : undefined,
+      contents,
+    };
+
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-goog-api-key': GEMINI_API_KEY,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      const details =
+        data.error?.message ||
+        data.promptFeedback?.blockReason ||
+        data.candidates?.[0]?.finishReason ||
+        'Unknown error';
+      const status = response.status || 500;
+      throw Object.assign(new Error(details), { status, raw: data });
+    }
+
+    return data;
+  } finally {
+    clearTimeout(id);
+  }
+}
+
+
+
+
+
 async function callGemini(model, { systemText, contents }) {
   const body = {
     system_instruction: systemText ? { parts: [{ text: systemText }] } : undefined,
@@ -160,17 +207,23 @@ async function callGemini(model, { systemText, contents }) {
   return data;
 }
 
-function buildContents({ messages, pdfContexts }) {
+
+
+
+function buildContents({ messages, pdfContexts, imageBlobs }) {
   const contents = [];
 
+  // chat history
   for (const m of messages || []) {
+    if (!m?.content) continue;
     contents.push({
       role: toGeminiRole(m.role),
       parts: [{ text: m.content }],
     });
   }
 
-  if (pdfContexts && pdfContexts.length > 0) {
+  // textual docs (pdf/docx/etc.) converted to text
+  if (pdfContexts?.length) {
     for (const ctx of pdfContexts) {
       const header = `# SOURCE: ${ctx.filename}\n(Extracted text below)`;
       contents.push({ role: 'user', parts: [{ text: header }] });
@@ -186,13 +239,40 @@ function buildContents({ messages, pdfContexts }) {
     }
   }
 
+  // images as inlineData (OCR ki baduluga direct ga)
+  if (imageBlobs?.length) {
+    for (const img of imageBlobs) {
+      contents.push({
+        role: 'user',
+        parts: [
+          { text: `# SOURCE: ${img.filename}\nUse this image to answer. If text is present, read it.` },
+          { inlineData: { mimeType: img.mimeType, data: img.base64 } },
+        ],
+      });
+    }
+  }
+
   return contents;
 }
+
+
+
+
+
 
 // ===================================================================
 // 🔎 Text extraction for many file types
 // ===================================================================
 const extFromName = (name = '') => (name.split('.').pop() || '').toLowerCase();
+
+
+// ADD THIS ↓↓↓
+const isImage = (file) =>
+  (file?.mimetype && file.mimetype.startsWith('image/')) ||
+  ['png','jpg','jpeg','bmp','gif','tiff','webp'].includes(extFromName(file?.originalname || ''));
+
+
+
 
 async function ocrImageToText(buffer) {
   try {
@@ -431,13 +511,16 @@ app.post('/api/chat', upload.any(), async (req, res) => {
       messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
     }
 
-    // 2) Files -> Text contexts (universal)
-    let fileContexts = [];
+    // 2) Files split: images vs docs
     const incomingFiles = Array.isArray(req.files) ? req.files : [];
+    const imageFiles = incomingFiles.filter(isImage);
+    const docFiles   = incomingFiles.filter(f => !isImage(f));
 
-    if (isMultipart && incomingFiles.length > 0) {
+    // 2a) docs → text extraction (existing pipeline)
+    let fileContexts = [];
+    if (isMultipart && docFiles.length > 0) {
       const parsed = await Promise.all(
-        incomingFiles.map(async (file) => {
+        docFiles.map(async (file) => {
           const text = await extractTextFromFile(file);
           return {
             filename: file.originalname || 'unnamed',
@@ -448,27 +531,37 @@ app.post('/api/chat', upload.any(), async (req, res) => {
       fileContexts = parsed.filter(p => p.text && p.text.length > 0);
     }
 
-    // 3) system
+    // 2b) images → inlineData (NO OCR here)
+    const imageBlobs = imageFiles.map(f => ({
+      filename: f.originalname || 'image',
+      mimeType: f.mimetype || 'image/png',
+      base64: f.buffer.toString('base64'),
+    }));
+
+    // 3) system prompt
     const systemText =
-      fileContexts.length > 0
+      (fileContexts.length > 0 || imageBlobs.length > 0)
         ? [
             'You are a helpful assistant.',
-            'Use ONLY the provided document context to answer when possible.',
-            'If multiple files are present:',
-            '- One may contain questions; others may contain reference material.',
-            '- Answer each question strictly using the reference documents. If information is missing, say what is missing.',
-            'Cite the source file name [source: filename.ext] at the end of chat response ',
-            'If something is not in the documents, respond briefly and say it is not present in the provided documents.',
+            'You may receive text snippets and/or images as sources.',
+            'Use ONLY the provided sources when possible; cite file names like [source: filename].',
+            'If an image has text, read it and use it.',
+            'If information is missing, say what is missing.',
           ].join('\n')
         : 'You are a helpful assistant. No documents are provided; answer normally.';
 
     // 4) contents
-    const contents = buildContents({ messages, pdfContexts: fileContexts });
+    const contents = buildContents({ messages, pdfContexts: fileContexts, imageBlobs });
 
-    // 5) call model
-    const data = await callGemini(MODEL, { systemText, contents });
+    // 5) guard: nothing to send
+    if (!contents || contents.length === 0) {
+      return res.status(400).json({ error: 'no_input', details: 'Provide messages or files.' });
+    }
 
-    // 6) text out
+    // 6) call model (with timeout)
+    const data = await callGeminiWithTimeout(MODEL, { systemText, contents }, 20000);
+
+    // 7) text out
     const text =
       data?.candidates?.[0]?.content?.parts?.map((p) => p.text).join('\n') ||
       data?.candidates?.[0]?.content?.parts?.[0]?.text ||
@@ -476,9 +569,12 @@ app.post('/api/chat', upload.any(), async (req, res) => {
 
     res.json({
       ok: true,
-      groundedInPdfs: fileContexts.length > 0, // name kept for backward-compat
-      usedSources: fileContexts.map((p) => p.filename),
-      response: text,
+      groundedInPdfs: fileContexts.length > 0,
+      usedSources: [
+        ...fileContexts.map((p) => p.filename),
+        ...imageBlobs.map((i) => i.filename),
+      ],
+      response: text || '(No text returned)',
       raw: data,
     });
   } catch (error) {
@@ -488,6 +584,7 @@ app.post('/api/chat', upload.any(), async (req, res) => {
       .json({ error: 'Gemini Chat Error', details: error.message });
   }
 });
+
 
 // ===================================================================
 // 🗂️ Chat history APIs (need Bearer token; DO NOT affect /api/chat)
