@@ -849,76 +849,30 @@ app.post('/api/chat-ibm', upload.any(), async (req, res) => {
   }
 });
 
-// -----------------------------
-// Gemini Live: accept browser SDP offer, mint access token, forward to Gemini Live and return answer SDP
-// Requires: GEMINI_API_KEY and MODEL already defined in this file (you already have them).
-// -----------------------------
+
+// In your existing server.js (CommonJS style)...
+
 app.post('/api/gemini-live/offer', async (req, res) => {
   try {
-    // Expect JSON with { sdp: "<offerSdp>", config?: { model?: "...", generationConfig?: {...} } }
     const { sdp, config = {} } = req.body || {};
     if (!sdp) return res.status(400).json({ error: 'missing_offer_sdp' });
 
-    // 1) Generate a short-lived access token for the client using the API key
-    // Endpoint: /v1beta/live:generateAccessToken
-    const tokenResp = await fetch('https://generativelanguage.googleapis.com/v1beta/live:generateAccessToken', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        // Use X-goog-api-key header (you have an API key stored in GEMINI_API_KEY)
-        'X-goog-api-key': GEMINI_API_KEY,
-      },
-      body: JSON.stringify({
-        // scope recommended for realtime usage
-        scope: 'https://www.googleapis.com/auth/generative.language.realtime',
-      }),
-    });
+    // Build the Gemini Live WebSocket URL:
+    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent`;
 
-    if (!tokenResp.ok) {
-      const txt = await tokenResp.text().catch(() => '');
-      console.error('generateAccessToken failed:', tokenResp.status, txt);
-      return res.status(500).json({ error: 'generate_access_token_failed', details: txt });
-    }
+    // Optional: you can include API key as query parameter if needed:
+    const urlWithKey = `${wsUrl}?key=${encodeURIComponent(GEMINI_API_KEY)}`;
 
-    const tokenJson = await tokenResp.json();
-    const accessToken = tokenJson?.accessToken || tokenJson?.access_token || tokenJson?.token;
-    if (!accessToken) {
-      console.error('No accessToken returned:', tokenJson);
-      return res.status(500).json({ error: 'no_access_token_returned', raw: tokenJson });
-    }
-
-    // 2) Forward the offer SDP to Gemini Live API to get an answer SDP
-    // Use the model configured in your file; allow override via config.model
-    const modelName = config.model || MODEL || 'gemini-2.0-flash';
-    const sdpUrl = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:streamGenerateContent?alt=sdp`;
-
-    // Optionally you can pass generationConfig param as query or via headers/body depending on API; the simple flow is post SDP.
-    const sdpResp = await fetch(sdpUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/sdp',
-        'Authorization': `Bearer ${accessToken}`,
-      },
-      body: sdp,
-    });
-
-    if (!sdpResp.ok) {
-      const txt = await sdpResp.text().catch(() => '');
-      console.error('Gemini SDP exchange failed:', sdpResp.status, txt);
-      return res.status(500).json({ error: 'gemini_sdp_failed', details: txt });
-    }
-
-    const answerSdp = await sdpResp.text();
-
-    // 3) Return answer SDP and the short-lived token metadata (OPTIONAL)
-    // You can return token expiry info from tokenJson to client if you want to reconnect later.
+    // And pass back to client both the WS URL and the model/config needed:
     res.json({
       ok: true,
-      answer: answerSdp,
-      tokenInfo: tokenJson, // contains accessToken and expiry (if provided)
+      wsUrl: urlWithKey,
+      model: config.model || MODEL || 'gemini-2.0-flash',
+      generationConfig: config.generationConfig || { temperature: 0.8, responseModalities: ["AUDIO", "TEXT"] }
     });
+
   } catch (err) {
-    console.error('gemini-live /offer error:', err);
+    console.error('gemini-live/offer error:', err);
     res.status(500).json({ error: 'server_error', details: err.message });
   }
 });
