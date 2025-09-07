@@ -852,28 +852,35 @@ app.post('/api/chat-ibm', upload.any(), async (req, res) => {
 
 // In your existing server.js (CommonJS style)...
 
-app.post('/api/gemini-live/offer', async (req, res) => {
+ app.post('/api/gemini-live/offer', async (req, res) => {
   try {
-    const { sdp, config = {} } = req.body || {};
+    const { sdp } = req.body || {};
     if (!sdp) return res.status(400).json({ error: 'missing_offer_sdp' });
 
-    // Build the Gemini Live WebSocket URL:
-    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent`;
+    const modelName = MODEL || "gemini-2.0-flash";
 
-    // Optional: you can include API key as query parameter if needed:
-    const urlWithKey = `${wsUrl}?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+    // Call Gemini Live with offer SDP
+    const resp = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?alt=sdp&key=${GEMINI_API_KEY}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/sdp" },
+        body: sdp,
+      }
+    );
 
-    // And pass back to client both the WS URL and the model/config needed:
-    res.json({
-      ok: true,
-      wsUrl: urlWithKey,
-      model: config.model || MODEL || 'gemini-2.0-flash',
-      generationConfig: config.generationConfig || { temperature: 0.8, responseModalities: ["AUDIO", "TEXT"] }
-    });
+    if (!resp.ok) {
+      const txt = await resp.text();
+      console.error("Gemini SDP exchange failed:", txt);
+      return res.status(500).json({ error: "gemini_sdp_failed", details: txt });
+    }
 
+    const answerSdp = await resp.text();
+
+    res.json({ ok: true, answer: answerSdp });
   } catch (err) {
-    console.error('gemini-live/offer error:', err);
-    res.status(500).json({ error: 'server_error', details: err.message });
+    console.error("Offer error:", err);
+    res.status(500).json({ error: "server_error", details: err.message });
   }
 });
 
