@@ -33,8 +33,7 @@ if (!HF_API_KEY) {
 // --------- CORS ---------
 const ALLOWED_ORIGINS = [
   'http://localhost:5173',
-  'http://localhost:3000',
-  
+  'https://firebrik.vercel.app',
   'https://studymate-swart.vercel.app'
 ];
 app.use(
