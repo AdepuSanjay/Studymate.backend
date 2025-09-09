@@ -65,7 +65,7 @@ const upload = multer({
 
 // --------- MongoDB ---------
 mongoose
-  .connect(process.env.MONGO_URI || "mongodb+srv://abcd:1234@cluster0.k4abt9h.mongodb.net/studymate")
+  .connect(process.env.MONGO_URI || "mongodb+srv://Abcd:123@cluster0.lc6c1xt.mongodb.net/study")
   .then(() => console.log("✅ MongoDB Connected"))
   .catch(err => console.error("❌ MongoDB Error:", err));
 
