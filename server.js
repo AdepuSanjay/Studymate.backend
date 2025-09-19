@@ -20,7 +20,7 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey";
 
-h
+
 
 const HF_API_KEY = process.env.HF_API_KEY; // e.g. hf_xxx (DO NOT commit)
 const GRANITE_MODEL = process.env.GRANITE_MODEL || "ibm-granite/granite-3.3-8b-instruct";
