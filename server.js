@@ -113,7 +113,7 @@ const transporter = nodemailer.createTransport({
 });
 
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || 'AIzaSyBxfK1fAJjzJImC6VheREpSNxl-JbVeb6g';
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY ||'AIzaSyDb_dgJI1gxqYGD6xEW5wEiCTEJjyy6z3U';
 const MODEL = 'gemini-2.0-flash';
 
 const toGeminiRole = (role) => (role === 'assistant' ? 'model' : 'user');
